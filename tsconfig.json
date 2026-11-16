@@ -1,0 +1,56 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./src/*",
+        "./*"
+      ],
+      "react-native": ["./src/shims/react-native.ts"],
+      "expo-router": ["./src/shims/expo-router.tsx"],
+      "@expo/vector-icons": ["./src/shims/expo-vector-icons.tsx"],
+      "@react-native-async-storage/async-storage": ["./src/shims/async-storage.ts"],
+      "expo-camera": ["./src/shims/expo-camera.tsx"],
+      "expo-image-picker": ["./src/shims/expo-image-picker.ts"],
+      "expo-file-system": ["./src/shims/expo-file-system.ts"],
+      "expo-location": ["./src/shims/expo-location.ts"],
+      "expo-blur": ["./src/shims/expo-blur.tsx"],
+      "expo-video-thumbnails": ["./src/shims/expo-video-thumbnails.ts"],
+      "expo-haptics": ["./src/shims/expo-haptics.ts"],
+      "expo-status-bar": ["./src/shims/expo-status-bar.tsx"],
+      "expo-navigation-bar": ["./src/shims/expo-navigation-bar.ts"],
+      "expo-font": ["./src/shims/expo-font.ts"],
+      "expo-linear-gradient": ["./src/shims/expo-linear-gradient.tsx"],
+      "expo-splash-screen": ["./src/shims/expo-splash-screen.ts"],
+      "@expo-google-fonts/inter": ["./src/shims/expo-google-fonts.ts"],
+      "react-native-gesture-handler": ["./src/shims/react-native-gesture-handler.tsx"],
+      "react-native-keyboard-controller": ["./src/shims/react-native-keyboard-controller.tsx"],
+      "react-native-reanimated": ["./src/shims/react-native-reanimated.ts"],
+      "react-native-svg": ["./src/shims/react-native-svg.tsx"],
+      "react-native-safe-area-context": ["./src/shims/react-native-safe-area-context.tsx"],
+      "react-native-vision-camera": ["./src/shims/react-native-vision-camera.tsx"],
+      "@workspace/api-client-react": ["./src/shims/api-client-react.ts"]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist"]
+}

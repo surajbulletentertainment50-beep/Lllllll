@@ -1,0 +1,15 @@
+{
+	"appId": "com.mastivideo.app",
+	"appName": "Masti Video",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https"
+	},
+	"plugins": {
+		"SystemBars": {
+			"style": "DARK",
+			"insetsHandling": "disable",
+			"initialViewportFitValueHint": "cover"
+		}
+	}
+}

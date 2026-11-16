@@ -1,0 +1,56 @@
+{
+  "messages": {
+    "newuser__usr_rajkali_owner": [
+      {
+        "id": "msg_1794799886018_jv88p9",
+        "clientId": "local_1794799885007_5ku9zq",
+        "conversationId": "newuser__usr_rajkali_owner",
+        "senderId": "jxnpyqytuxbovvm4zorjppwhx0u2",
+        "senderName": "surajreal31",
+        "senderAvatar": "",
+        "recipientId": "usr_rajkali_owner",
+        "recipientName": "Raj Kali Kumar",
+        "recipientAvatar": "",
+        "text": "❤️ Sent you a Dil!",
+        "createdAt": "2026-11-16T03:31:26.018Z",
+        "read": false
+      },
+      {
+        "id": "msg_1794799899337_g26zfy",
+        "clientId": "local_1794799898379_kkbiq1",
+        "conversationId": "newuser__usr_rajkali_owner",
+        "senderId": "jxnpyqytuxbovvm4zorjppwhx0u2",
+        "senderName": "surajreal31",
+        "senderAvatar": "",
+        "recipientId": "usr_rajkali_owner",
+        "recipientName": "Raj Kali Kumar",
+        "recipientAvatar": "",
+        "text": "🔥",
+        "createdAt": "2026-11-16T03:31:39.337Z",
+        "read": false
+      }
+    ]
+  },
+  "conversations": {
+    "newuser__usr_rajkali_owner": {
+      "conversationId": "newuser__usr_rajkali_owner",
+      "participants": [
+        "jxnpyqytuxbovvm4zorjppwhx0u2",
+        "usr_rajkali_owner"
+      ],
+      "participantDetails": {
+        "jxnpyqytuxbovvm4zorjppwhx0u2": {
+          "name": "surajreal31",
+          "avatar": ""
+        },
+        "usr_rajkali_owner": {
+          "name": "Raj Kali Kumar",
+          "avatar": ""
+        }
+      },
+      "lastMessage": "🔥",
+      "lastMessageAt": "2026-11-16T03:31:39.337Z",
+      "lastSenderId": "jxnpyqytuxbovvm4zorjppwhx0u2"
+    }
+  }
+}
