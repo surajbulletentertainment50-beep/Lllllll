@@ -79,6 +79,22 @@ export const uploadVideoToMastiBash = async (
       formData.append('avatarUrl', av);
     }
     if (mergedMeta.thumbnailUrl) formData.append('thumbnailUrl', String(mergedMeta.thumbnailUrl));
+    if (mergedMeta.privacy) formData.append('privacy', String(mergedMeta.privacy));
+    if (typeof mergedMeta.hideLikes === 'boolean') formData.append('hideLikes', String(mergedMeta.hideLikes));
+    if (typeof mergedMeta.hideComments === 'boolean') formData.append('hideComments', String(mergedMeta.hideComments));
+    if (typeof mergedMeta.hideSaves === 'boolean') formData.append('hideSaves', String(mergedMeta.hideSaves));
+    if (typeof mergedMeta.hideShares === 'boolean') formData.append('hideShares', String(mergedMeta.hideShares));
+    if (typeof mergedMeta.brandedContent === 'boolean') {
+      formData.append('brandedContent', String(mergedMeta.brandedContent));
+      formData.append('isSponsored', String(mergedMeta.brandedContent));
+    }
+    if (typeof mergedMeta.highQuality === 'boolean') formData.append('highQuality', String(mergedMeta.highQuality));
+    if (Array.isArray(mergedMeta.taggedPeople) && mergedMeta.taggedPeople.length > 0) {
+      formData.append('taggedPeople', JSON.stringify(mergedMeta.taggedPeople));
+    }
+    if (Array.isArray(mergedMeta.links) && mergedMeta.links.length > 0) {
+      formData.append('links', JSON.stringify(mergedMeta.links));
+    }
     if (onProgress) onProgress(10);
 
     let blob: Blob | null = null;

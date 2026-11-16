@@ -3371,7 +3371,11 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
             <View style={styles.aboutLogoBox}>
-              <Ionicons name="play-circle" size={56} color="#a855f7" />
+              <Image
+                source={{ uri: '/assets/aistudio/20261116_104237_caf28578.png' }}
+                style={styles.aboutLogoImage}
+                resizeMode="contain"
+              />
               <Text style={styles.aboutAppName}>Masti Video</Text>
               <Text style={styles.aboutVersion}>Version 1.0.0</Text>
             </View>
@@ -4371,7 +4375,8 @@ const styles = StyleSheet.create({
     lineHeight: 30,
     includeFontPadding: true,
   },
-  aboutLogoBox: { alignItems: 'center', paddingVertical: 20, gap: 6 },
-  aboutAppName: { color: '#fff', fontSize: 20, fontWeight: '700' },
-  aboutVersion: { color: '#888', fontSize: 13 },
+  aboutLogoBox: { alignItems: 'center', paddingTop: 10, paddingBottom: 16 },
+  aboutLogoImage: { width: 220, height: 220, marginTop: -12, marginBottom: -16 },
+  aboutAppName: { color: '#fff', fontSize: 22, fontWeight: '800', marginTop: 2 },
+  aboutVersion: { color: '#888', fontSize: 13, marginTop: 4 },
 });

@@ -243,6 +243,48 @@ const MASTI_MEDIA_CACHE_KEY = '@masti_media_videos_v3';
 const MASTI_AUDIO_CACHE_KEY = '@masti_bash_audio_v1';
 const VIDEO_THUMBNAIL_OVERRIDES_PREFIX = '@masti_video_thumbnail_overrides_';
 const VIDEO_COVER_POSITIONS_PREFIX = '@masti_video_cover_positions_';
+const VIDEO_POST_OPTIONS_STORAGE_KEY = '@masti_video_post_options_v1';
+
+const readLocalVideoPostOptions = (): Record<string, any> => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(VIDEO_POST_OPTIONS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    }
+  } catch {}
+  return {};
+};
+
+const saveLocalVideoPostOptions = (keys: string[], options: Record<string, any>) => {
+  const cleanKeys = keys
+    .map((k) => String(k ?? '').trim())
+    .filter(Boolean);
+  if (cleanKeys.length === 0) return readLocalVideoPostOptions();
+  const next = { ...readLocalVideoPostOptions() };
+  cleanKeys.forEach((k) => {
+    next[k] = { ...(next[k] || {}), ...options };
+  });
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(VIDEO_POST_OPTIONS_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {}
+  AsyncStorage.setItem(VIDEO_POST_OPTIONS_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+  return next;
+};
+
+const normalizeExternalLinkUrl = (rawUrl: string): string => {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  if (/^(javascript|data|vbscript):/i.test(trimmed)) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed.replace(/^\/+/, '')}`;
+};
 const PROFILE_CORE_TEXT_FIELDS = [
   'email',
   'name',
@@ -3048,12 +3090,24 @@ const LONG_PRESS_THRESHOLD = 320; // ms — below this on release = "tap", >= th
   const savedSongsLoadedRef = useRef(false);
   const [videoThumbnailOverrides, setVideoThumbnailOverrides] = useState<Record<string, string>>({});
   const [videoCoverPositions, setVideoCoverPositions] = useState<Record<string, number>>({});
+  const [videoPostOptions, setVideoPostOptions] = useState<Record<string, any>>(() =>
+    readLocalVideoPostOptions(),
+  );
   const [videoSongOverrides, setVideoSongOverrides] = useState<Record<string, any>>(() =>
     getLocalVideoSongMetadataMap(),
   );
 
   useEffect(() => {
     let active = true;
+    AsyncStorage.getItem(VIDEO_POST_OPTIONS_STORAGE_KEY)
+      .then((raw) => {
+        if (!active || !raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          setVideoPostOptions((prev) => ({ ...parsed, ...prev }));
+        }
+      })
+      .catch(() => {});
     fetchServerVideoSongMetadata()
       .then((merged) => {
         if (active && merged && Object.keys(merged).length > 0) {
@@ -4848,11 +4902,38 @@ const LONG_PRESS_THRESHOLD = 320; // ms — below this on release = "tap", >= th
       v.url ||
       v.secure_url ||
       '';
+    const persistedPostOpts =
+      videoPostOptions[backendVideoId] ||
+      videoPostOptions[`db-${backendVideoId}`] ||
+      (backendVideoUrl ? videoPostOptions[backendVideoUrl] : undefined) ||
+      {};
+    const parsedBackendTags = (() => {
+      if (Array.isArray(v.taggedPeople)) return v.taggedPeople;
+      if (typeof v.taggedPeople === 'string' && v.taggedPeople.trim()) {
+        try {
+          const arr = JSON.parse(v.taggedPeople);
+          if (Array.isArray(arr)) return arr;
+        } catch {}
+      }
+      return [];
+    })();
+    const parsedBackendLinks = (() => {
+      if (Array.isArray(v.links)) return v.links;
+      if (typeof v.links === 'string' && v.links.trim()) {
+        try {
+          const arr = JSON.parse(v.links);
+          if (Array.isArray(arr)) return arr;
+        } catch {}
+      }
+      return [];
+    })();
     const explicitSponsoredFlag = [
       v.isSponsored,
       v.sponsored,
       v.isSponsoredContent,
       v.sponsor,
+      v.brandedContent,
+      persistedPostOpts.brandedContent,
     ].some((value) =>
       value === true ||
       value === 1 ||
@@ -4950,7 +5031,23 @@ const LONG_PRESS_THRESHOLD = 320; // ms — below this on release = "tap", >= th
     whatsapp: creatorSocialLinks.whatsapp || '',
     telegram: creatorSocialLinks.telegram || '',
     socialLinks: creatorSocialLinks,
-    privacy: v.privacy || 'public',
+    privacy: persistedPostOpts.privacy || v.privacy || 'public',
+    hideLikes: persistedPostOpts.hideLikes ?? (v.hideLikes === true || v.hideLikes === 'true'),
+    hideComments: persistedPostOpts.hideComments ?? (v.hideComments === true || v.hideComments === 'true'),
+    hideSaves: persistedPostOpts.hideSaves ?? (v.hideSaves === true || v.hideSaves === 'true'),
+    hideShares: persistedPostOpts.hideShares ?? (v.hideShares === true || v.hideShares === 'true'),
+    allowLikes: persistedPostOpts.allowLikes ?? !(v.hideLikes === true || v.hideLikes === 'true'),
+    allowComments: persistedPostOpts.allowComments ?? !(v.hideComments === true || v.hideComments === 'true'),
+    allowSaves: persistedPostOpts.allowSaves ?? !(v.hideSaves === true || v.hideSaves === 'true'),
+    allowShares: persistedPostOpts.allowShares ?? !(v.hideShares === true || v.hideShares === 'true'),
+    taggedPeople: Array.isArray(persistedPostOpts.taggedPeople) && persistedPostOpts.taggedPeople.length > 0
+      ? persistedPostOpts.taggedPeople
+      : parsedBackendTags,
+    links: Array.isArray(persistedPostOpts.links) && persistedPostOpts.links.length > 0
+      ? persistedPostOpts.links
+      : parsedBackendLinks,
+    brandedContent: persistedPostOpts.brandedContent ?? (v.brandedContent === true || v.brandedContent === 'true'),
+    highQuality: persistedPostOpts.highQuality ?? (v.highQuality !== false && v.highQuality !== 'false'),
     isUserUpload: true,
       // A remote URL only means that the media is playable. Do not label
       // every MastiBase video as Sponsored; use an explicit ad flag only.
@@ -4973,6 +5070,7 @@ const LONG_PRESS_THRESHOLD = 320; // ms — below this on release = "tap", >= th
     publicProfileAvatarCache,
     userId,
     videoCoverPositions,
+    videoPostOptions,
     videoSongOverrides,
     videoThumbnailOverrides,
     youtube,
@@ -5033,6 +5131,19 @@ const LONG_PRESS_THRESHOLD = 320; // ms — below this on release = "tap", >= th
           musicCover: resolvedMusicCover,
           musicVol: video.musicVol ?? optimistic.musicVol,
           originalSoundVol: video.originalSoundVol ?? optimistic.originalSoundVol,
+          privacy: video.privacy !== 'public' ? video.privacy : (optimistic.privacy || video.privacy),
+          hideLikes: Boolean(video.hideLikes || optimistic.hideLikes),
+          hideComments: Boolean(video.hideComments || optimistic.hideComments),
+          hideSaves: Boolean(video.hideSaves || optimistic.hideSaves),
+          hideShares: Boolean(video.hideShares || optimistic.hideShares),
+          allowLikes: !(video.hideLikes || optimistic.hideLikes),
+          allowComments: !(video.hideComments || optimistic.hideComments),
+          allowSaves: !(video.hideSaves || optimistic.hideSaves),
+          allowShares: !(video.hideShares || optimistic.hideShares),
+          taggedPeople: (video.taggedPeople?.length ? video.taggedPeople : optimistic.taggedPeople) || [],
+          links: (video.links?.length ? video.links : optimistic.links) || [],
+          brandedContent: Boolean(video.brandedContent || optimistic.brandedContent),
+          isSponsored: Boolean(video.isSponsored || optimistic.isSponsored || video.brandedContent || optimistic.brandedContent),
         };
       });
       // Drop both the temporary db-<id> entry and any stale copy with the
@@ -5170,6 +5281,11 @@ const [profileTabIndex, setProfileTabIndex] = useState(0);
   const isPagerDraggingRef = useRef(false);
   const pagerDragStartXRef = useRef(width);
   const lastWheelTabSwitchRef = useRef(0);
+  const lastWheelVideoSwitchRef = useRef(0);
+  const feedScrollDragStartRef = useRef<Record<string, { y: number; index: number; time: number }>>({
+    following: { y: 0, index: 0, time: 0 },
+    foryou: { y: 0, index: 0, time: 0 },
+  });
 
   const changeTab = useCallback((isFollowing: boolean, animated = true) => {
     if (isFollowing && isProfilePlaybackRef.current) return;
@@ -5513,6 +5629,7 @@ const [profileTabIndex, setProfileTabIndex] = useState(0);
   const [privacySetting, setPrivacySetting] = useState('public');
   const [allowLikes, setAllowLikes] = useState(true);
   const [allowComments, setAllowComments] = useState(true);
+  const [allowSaves, setAllowSaves] = useState(true);
   const [allowShares, setAllowShares] = useState(true);
   const [hideLikeCount, setHideLikeCount] = useState(false);
   const [hideCommentCount, setHideCommentCount] = useState(false);
@@ -6151,7 +6268,14 @@ const [profileTabIndex, setProfileTabIndex] = useState(0);
   const [showZoomLabel, setShowZoomLabel] = useState(false);
   const [showCoverSelection, setShowCoverSelection] = useState(false);
   const [coverFramePosition, setCoverFramePosition] = useState(0);
+  const [coverVideoDurationSec, setCoverVideoDurationSec] = useState(15);
+  const [coverSliderTrackWidth, setCoverSliderTrackWidth] = useState(() => Math.max(180, width - 72));
   const [selectedCoverUri, setSelectedCoverUri] = useState<string | null>(null);
+  const coverModalVideoRef = useRef<any>(null);
+  const coverThumbVideoRef = useRef<any>(null);
+  const coverSliderTrackRef = useRef<any>(null);
+  const coverSliderMetricsRef = useRef<{ left: number; width: number }>({ left: 16, width: 280 });
+  const coverVideoDurationSecRef = useRef<number>(15);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [processingVideoId, setProcessingVideoId] = useState(null);
@@ -6162,6 +6286,8 @@ const [profileTabIndex, setProfileTabIndex] = useState(0);
   const [saveToDeviceEnabled, setSaveToDeviceEnabled] = useState(false);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const [showPrivacySheet, setShowPrivacySheet] = useState(false);
+  const [showPostDraftsSheet, setShowPostDraftsSheet] = useState(false);
+  const [draftMenuTarget, setDraftMenuTarget] = useState<any>(null);
   const [showMusicModal, setShowMusicModal] = useState(false);
   const [showMusicTrimmer, setShowMusicTrimmer] = useState(false);
   const [trimmerSong, setTrimmerSong] = useState<any>(null);
@@ -6253,8 +6379,49 @@ const [profileTabIndex, setProfileTabIndex] = useState(0);
   const startTimerCountdownRef = useRef<() => void>(() => {});
   const cancelTimerCountdownRef = useRef<() => void>(() => {});
   const toggleCameraFacingRef = useRef<() => void>(() => {});
-  const [activeDescTab, setActiveDescTab] = useState('Hashtags');
+  const [activeDescTab, setActiveDescTab] = useState<string | null>(null);
   const [showVideoPickerModal, setShowVideoPickerModal] = useState(false);
+
+  const postTagCandidates = useMemo(() => {
+    const map = new Map<string, { handle: string; name: string; avatar: string; isVerified: boolean }>();
+    const myNorm = normalizedIdentity(userId);
+    const addCandidate = (rawHandle: any, rawName: any, rawAvatar: any, rawVerified?: any) => {
+      const clean = String(rawHandle || '').trim().replace(/^@+/, '');
+      const key = clean.toLowerCase();
+      if (!key || (myNorm && key === myNorm)) return;
+      if (/^(usr_|med_|masti-)/i.test(clean)) return;
+      const existing = map.get(key);
+      map.set(key, {
+        handle: `@${clean}`,
+        name: String(rawName || existing?.name || clean).trim(),
+        avatar: String(rawAvatar || existing?.avatar || ''),
+        isVerified: Boolean(rawVerified || existing?.isVerified),
+      });
+    };
+    liveDirectoryUsers.forEach((u: any) => addCandidate(u.userId || u.user, u.name, u.avatar || u.profileImage, u.isVerified));
+    dmUsers.forEach((u: any) => addCandidate(u.userId || u.user, u.name, u.avatar || u.profileImage, u.isVerified));
+    friendUsers.forEach((u: any) => addCandidate(u.userId || u.user, u.name, u.avatar || u.profileImage, u.isVerified));
+    videos.forEach((v: any) => addCandidate(v.userId || v.user, v.name, v.profileImage, v.isVerified));
+    return Array.from(map.values());
+  }, [dmUsers, friendUsers, liveDirectoryUsers, userId, videos]);
+
+  const postHashtagSuggestions = useMemo(() => {
+    const counts = new Map<string, number>();
+    const defaults = ['#masti', '#trending', '#viral', '#reels', '#comedy', '#music', '#dance', '#love'];
+    defaults.forEach((t, idx) => counts.set(t, 100 - idx));
+    videos.forEach((v: any) => {
+      const text = `${v.title || ''} ${v.desc || ''}`;
+      const matches = text.match(/#[a-zA-Z0-9_]+/g) || [];
+      matches.forEach((tag) => {
+        const lower = tag.toLowerCase();
+        counts.set(lower, (counts.get(lower) || 0) + 1);
+      });
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag)
+      .slice(0, 14);
+  }, [videos]);
 
   const performEditorSplit = useCallback(() => {
     const totalW = totalWRef.current || 1;
@@ -10880,6 +11047,14 @@ useEffect(() => {
         setShowPrivacySheet(false);
         return true;
       }
+      if (showPostDraftsSheet) {
+        setShowPostDraftsSheet(false);
+        return true;
+      }
+      if (draftMenuTarget) {
+        setDraftMenuTarget(null);
+        return true;
+      }
       if (showFilterModal || showFilters || showEffects) {
         setShowFilterModal(false);
         setShowFilters(false);
@@ -11022,7 +11197,7 @@ useEffect(() => {
     showVoiceoverModal, showMixAudio, showMixInfo, showEditModal,
     showStickerModal, showCoverSelection, showMoreOptions, showPrivacySheet,
     showFilterModal, showFilters, showEffects, showBeautyPanel,
-    showVideoPickerModal, showDrafts,
+    showVideoPickerModal, showDrafts, showPostDraftsSheet, draftMenuTarget,
     soundFullScreenVideo, showSoundDetail, showMusicTrimmer, showMusicModal,
     showCamera, recordingFlowStep,
     showChatScreen, showFollowers, showFollowing,
@@ -12156,19 +12331,42 @@ useEffect(() => {
   };
 
   const saveVideoToDevice = async () => {
+    if (!recordedVideoUri) {
+      showSuccessToast('Save karne ke liye koi video nahi mili');
+      return;
+    }
     try {
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        let downloadHref = recordedVideoUri;
+        let revokeAfter = false;
+        if (!/^blob:|^data:/i.test(recordedVideoUri)) {
+          try {
+            const resp = await fetch(recordedVideoUri);
+            const blob = await resp.blob();
+            downloadHref = URL.createObjectURL(blob);
+            revokeAfter = true;
+          } catch {}
+        }
+        const a = document.createElement('a');
+        a.href = downloadHref;
+        a.download = `masti_${Date.now()}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        if (revokeAfter) {
+          setTimeout(() => URL.revokeObjectURL(downloadHref), 1500);
+        }
+        showSuccessToast('Video device mein save ho gayi.');
+        return;
+      }
       const { status } = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
       if (status !== 'granted') {
         Alert.alert('Permission chahiye', 'Gallery access do video save karne ke liye');
         return;
       }
-      if (!recordedVideoUri) {
-        Alert.alert('Error', 'Save karne ke liye koi video nahi mili');
-        return;
-      }
       await MediaLibrary.saveToLibraryAsync(recordedVideoUri);
-                  showSuccessToast('Video gallery mein save ho gayi.');
-    } catch (e) {
+      showSuccessToast('Video gallery mein save ho gayi.');
+    } catch {
       Alert.alert('Error', 'Video save nahi ho payi. Dobara try karo.');
     }
   };
@@ -12196,9 +12394,21 @@ useEffect(() => {
 
     // Capture all values before state resets
     const capturedUri     = recordedVideoUri;
-    const capturedPrivacy = privacySetting;
+    const capturedPrivacy = privacySetting || 'public';
     const capturedCaption = uploadTitle.trim() || 'New video #masti';
     const capturedCoverFramePosition = coverFramePosition;
+    const capturedAllowLikes = allowLikes;
+    const capturedAllowComments = allowComments;
+    const capturedAllowSaves = allowSaves;
+    const capturedAllowShares = allowShares;
+    const capturedTaggedPeople = [...taggedPeople];
+    const capturedSavedLinks = savedLinks.map((l) => ({ ...l }));
+    const capturedBrandedContent = brandedContent;
+    const capturedHighQuality = allowHighQuality;
+    const capturedSaveToDevice = saveToDeviceEnabled;
+    const capturedShareToMessages = shareToMessages;
+    const capturedShareToInstagram = shareToInstagram;
+    const capturedShareToSnapchat = shareToSnapchat;
     const capturedAccountId = appAuth.currentUser?.uid || null;
     const capturedMastiBaseUserId = mastiBaseUserId;
     const capturedUserId = userId;
@@ -12212,18 +12422,24 @@ useEffect(() => {
       capturedSegments[0]?.start > 0.005 ||
       capturedSegments[0]?.end < 0.995;
     const myProfileVideo  = videos.find(v => v.user === userId);
-    let localThumbnailUri: string | null = null;
+    let localThumbnailUri: string | null = selectedCoverUri || null;
+
+    if (capturedSaveToDevice) {
+      void saveVideoToDevice();
+    }
 
     // Render the exact frame selected in the cover picker. The local image is
     // used immediately, then uploaded so it remains available after refresh.
-    try {
-      const thumbnail = await VideoThumbnails.getThumbnailAsync(capturedUri, {
-        time: Math.max(0, Math.round(capturedCoverFramePosition * 1000)),
-        quality: 0.8,
-      });
-      localThumbnailUri = thumbnail.uri;
-    } catch (error) {
-      console.warn('[Upload] Could not render selected cover frame:', error);
+    if (!localThumbnailUri) {
+      try {
+        const thumbnail = await VideoThumbnails.getThumbnailAsync(capturedUri, {
+          time: Math.max(0, Math.round(capturedCoverFramePosition * 1000)),
+          quality: 0.8,
+        });
+        localThumbnailUri = thumbnail.uri;
+      } catch (error) {
+        console.warn('[Upload] Could not render selected cover frame:', error);
+      }
     }
 
     const uploadId = Date.now().toString();
@@ -12245,6 +12461,23 @@ useEffect(() => {
           isOriginal: true,
         };
     const uploadHasAddedSong = !isOwnOriginalSongPlaceholder(uploadSong, uploadId);
+
+    const postOptionsPayload = {
+      privacy: capturedPrivacy,
+      hideLikes: !capturedAllowLikes,
+      hideComments: !capturedAllowComments,
+      hideSaves: !capturedAllowSaves,
+      hideShares: !capturedAllowShares,
+      allowLikes: capturedAllowLikes,
+      allowComments: capturedAllowComments,
+      allowSaves: capturedAllowSaves,
+      allowShares: capturedAllowShares,
+      taggedPeople: capturedTaggedPeople,
+      links: capturedSavedLinks,
+      brandedContent: capturedBrandedContent,
+      highQuality: capturedHighQuality,
+      isSponsored: capturedBrandedContent,
+    };
 
     const pendingVideo = {
       id: uploadId,
@@ -12272,7 +12505,7 @@ useEffect(() => {
       youtube: youtube,
       instagram: instagram,
       facebook: facebook,
-      privacy: capturedPrivacy,
+      ...postOptionsPayload,
     };
 
     // ── STEP 1: Close upload screen immediately ──────────────────────────
@@ -12288,7 +12521,21 @@ useEffect(() => {
     setSelectedSong(null);
     setUploadTitle('');
     setPrivacySetting('public');
+    setAllowLikes(true);
+    setAllowComments(true);
+    setAllowSaves(true);
+    setAllowShares(true);
+    setTaggedPeople([]);
+    setSavedLinks([]);
+    setBrandedContent(false);
+    setSaveToDeviceEnabled(false);
+    setAllowHighQuality(true);
+    setShareToMessages(false);
+    setShareToInstagram(false);
+    setShareToSnapchat(false);
     setLocationEnabled(false);
+    setSelectedCoverUri(null);
+    setActiveDescTab(null);
     setCoverFramePosition(0);
 
     // ── STEP 2: Show the MastiBase upload with live progress ──────────────
@@ -12350,6 +12597,7 @@ useEffect(() => {
         musicVol: capturedMusicVol,
         originalSoundVol: capturedOriginalSoundVol,
         segments: capturedSegments,
+        ...postOptionsPayload,
       };
       mastiResult = shouldRenderEditedVideo
         ? await uploadEditedVideoToMastiBash(
@@ -12392,6 +12640,12 @@ useEffect(() => {
       ...uploadSong,
       audioMuxedInVideo: isSongMuxed,
     };
+
+    const updatedOptionsMap = saveLocalVideoPostOptions(
+      [String(savedVideo.id), `db-${savedVideo.id}`, String(result.secure_url || '')],
+      postOptionsPayload,
+    );
+    setVideoPostOptions((prev) => ({ ...prev, ...updatedOptionsMap }));
 
     if (!isOwnOriginalSongPlaceholder(persistedUploadSong, String(savedVideo.id))) {
       const updatedMap = saveLocalVideoSongMetadata(
@@ -12467,6 +12721,7 @@ useEffect(() => {
         localAsset: result.muxedLocalUrl || (!isSongMuxed ? capturedUri : undefined),
         thumbnail: durableThumbnailUrl || pendingVideoRef.current.thumbnail || null,
         coverFramePosition: capturedCoverFramePosition,
+        ...postOptionsPayload,
       };
       pendingVideoRef.current = null;
 
@@ -12495,13 +12750,35 @@ useEffect(() => {
       // Switch away from "Following" tab so the new post is visible
       if (activeTab) changeTab(false, false);
       setPendingScrollVideoId(videoToAdd.id);
+
+      if (capturedShareToMessages || capturedShareToInstagram || capturedShareToSnapchat) {
+        const postShareUrl = getMastiVideoAppLink(videoToAdd.id);
+        Clipboard.setStringAsync?.(postShareUrl).catch?.(() => {});
+        if (capturedShareToMessages) {
+          setTimeout(() => {
+            setCurrentVideoItem(videoToAdd);
+            setShareOpenedFromProfile(false);
+            setShowShare(true);
+          }, 350);
+        } else if (capturedShareToInstagram) {
+          Linking.openURL('instagram://sharesheet').catch(() => {
+            Share.share({ message: `${capturedCaption}\n${postShareUrl}`, url: postShareUrl }).catch(() => {});
+          });
+          showSuccessToast('Video link Instagram share ke liye ready hai!');
+        } else if (capturedShareToSnapchat) {
+          Linking.openURL('snapchat://').catch(() => {
+            Share.share({ message: `${capturedCaption}\n${postShareUrl}`, url: postShareUrl }).catch(() => {});
+          });
+          showSuccessToast('Video link Snapchat share ke liye ready hai!');
+        }
+      }
     }
 
     setTimeout(() => {
       setIsUploading(false);
       setUploadProgress(0);
     }, 600);
-  }, [activeTab, adsConfig, bio, changeTab, currentVideoItem, editedVideoSegments, facebook, followingUsers, instagram, musicVol, name, originalSoundVol, ownFollowers, profileImage, queryClient, recordedVideoUri, selectedSong, uploadTitle, userId, youtube]);
+  }, [activeTab, adsConfig, allowComments, allowHighQuality, allowLikes, allowSaves, allowShares, bio, brandedContent, changeTab, coverFramePosition, currentVideoItem, editedVideoSegments, facebook, followingUsers, instagram, musicVol, name, originalSoundVol, ownFollowers, privacySetting, profileImage, queryClient, recordedVideoUri, savedLinks, saveToDeviceEnabled, selectedCoverUri, selectedSong, shareToInstagram, shareToMessages, shareToSnapchat, showSuccessToast, taggedPeople, uploadTitle, userId, videos, youtube]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const changeProfileTab = (index) => {
@@ -14418,13 +14695,44 @@ useEffect(() => {
     onPanResponderTerminate: () => { lockTimelineScrollRef.current(false); },
   })).current;
 
+  const updateCoverPositionFromPageX = useCallback((pageX: number, fallbackLocX?: number) => {
+    const el = coverSliderTrackRef.current;
+    let pct = -1;
+    if (typeof window !== 'undefined' && el && typeof el.getBoundingClientRect === 'function') {
+      const rect = el.getBoundingClientRect();
+      if (rect && rect.width > 10) {
+        pct = Math.max(0, Math.min(1, (pageX - rect.left) / rect.width));
+      }
+    }
+    if (pct < 0) {
+      const { left, width: tw } = coverSliderMetricsRef.current;
+      const safeW = Math.max(10, tw || (widthRef.current - 72));
+      const raw = left > 0 && pageX > 0 ? pageX - left : (fallbackLocX ?? 0);
+      pct = Math.max(0, Math.min(1, raw / safeW));
+    }
+    const maxDur = Math.max(1, coverVideoDurationSecRef.current || 15);
+    const nextSec = Number((pct * maxDur).toFixed(2));
+    setCoverFramePosition(nextSec);
+    setSelectedCoverUri(null);
+    const seekMs = Math.max(0, Math.round(nextSec * 1000));
+    coverModalVideoRef.current?.setPositionAsync?.(seekMs)?.catch?.(() => {});
+    coverThumbVideoRef.current?.setPositionAsync?.(seekMs)?.catch?.(() => {});
+  }, []);
+
   const coverSliderPan = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
-    onPanResponderMove: (_evt, gs) => {
-      const trackW = Math.max(1, widthRef.current - 80);
-      const pct = Math.max(0, Math.min(1, (gs.moveX - 16) / trackW));
-      setCoverFramePosition(pct * 15);
+    onPanResponderGrant: (e) => {
+      coverSliderTrackRef.current?.measureInWindow?.((x: number, _y: number, w: number) => {
+        if (w > 10) coverSliderMetricsRef.current = { left: x, width: w };
+      });
+      updateCoverPositionFromPageX(e?.nativeEvent?.pageX ?? 0, e?.nativeEvent?.locationX ?? 0);
+    },
+    onPanResponderMove: (e, gs) => {
+      const px = (e?.nativeEvent?.pageX && e.nativeEvent.pageX > 0) ? e.nativeEvent.pageX : gs.moveX;
+      updateCoverPositionFromPageX(px, e?.nativeEvent?.locationX);
     },
   })).current;
   // ─────────────────────────────────────────────────────────────────────────
@@ -17324,6 +17632,74 @@ useEffect(() => {
 
     // ─── Upload / Post Screen (TikTok-style) ─────────────────────────────────
     if (recordedVideoUri && recordingFlowStep === 'upload') {
+      const closePostScreenCleanly = () => {
+        void stopReviewMusic();
+        stopVoiceoverCapture();
+        void stopVoiceoverSound();
+        setVoiceoverUri(null);
+        setVoiceoverDurationMs(0);
+        setShowPostDraftsSheet(false);
+        setShowCoverSelection(false);
+        setShowTagPeopleModal(false);
+        setShowAddLinkModal(false);
+        setShowPrivacySheet(false);
+        setShowMoreOptions(false);
+        setShowVideoPickerModal(false);
+        setActiveDescTab(null);
+        setShowCamera(false);
+        setRecordingFlowStep(null);
+        setRecordedVideoUri(null);
+      };
+
+      const saveCurrentPostAsDraft = () => {
+        const newDraft = {
+          id: Date.now().toString(),
+          uri: recordedVideoUri,
+          title: uploadTitle || 'Draft',
+          privacySetting,
+          taggedPeople: [...taggedPeople],
+          savedLinks: savedLinks.map((l) => ({ ...l })),
+          coverFramePosition,
+          allowLikes,
+          allowComments,
+          allowSaves,
+          allowShares,
+          brandedContent,
+          allowHighQuality,
+          selectedSong,
+          duration: coverVideoDurationSecRef.current || 15,
+          savedAt: new Date().toISOString(),
+        };
+        setDrafts((prev: any[]) => [newDraft, ...prev]);
+        closePostScreenCleanly();
+        showSuccessToast('Video draft mein save ho gaya.');
+      };
+
+      const ownerOrFeedVideos = (() => {
+        const owned = videos.filter((v) => isVideoOwnedByCurrentUser(v));
+        return owned.length > 0 ? owned : videos;
+      })();
+
+      const formatSecLabel = (rawSec: number) => {
+        const total = Math.max(0, Math.round(rawSec));
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+      };
+
+      const filteredTagUsers = postTagCandidates.filter((u) => {
+        const q = tagSearchText.trim().toLowerCase().replace(/^@+/, '');
+        if (!q) return true;
+        return (
+          u.handle.toLowerCase().includes(q) ||
+          u.name.toLowerCase().includes(q)
+        );
+      });
+      const customTagHandle = tagSearchText.trim().replace(/^@+/, '').replace(/\s+/g, '_');
+      const showCustomTagRow =
+        Boolean(customTagHandle) &&
+        !filteredTagUsers.some((u) => u.handle.replace(/^@+/, '').toLowerCase() === customTagHandle.toLowerCase());
+
       return (
         <View style={[styles.cameraContainer, { backgroundColor: '#111' }]}>
 
@@ -17333,7 +17709,7 @@ useEffect(() => {
               <Ionicons name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
             <Text style={[flowStyles.editorTitle, { color: '#fff' }]}>Post</Text>
-            <TouchableOpacity onPress={() => { setShowCamera(false); setRecordingFlowStep(null); setRecordedVideoUri(null); }} hitSlop={{top:12,bottom:12,left:12,right:12}}>
+            <TouchableOpacity onPress={closePostScreenCleanly} hitSlop={{top:12,bottom:12,left:12,right:12}}>
               <Ionicons name="close" size={24} color="#fff" />
             </TouchableOpacity>
           </View>
@@ -17365,18 +17741,27 @@ useEffect(() => {
                         <TouchableOpacity
                           key={tab.key}
                           onPress={() => {
-                            setActiveDescTab(tab.key);
-                            if (tab.key === '#Hashtags') {
-                              setUploadTitle(prev => prev + '#');
-                            } else if (tab.key === '@Mention') {
-                              setUploadTitle(prev => prev + '@');
-                            } else if (tab.key === 'Videos') {
+                            if (tab.key === 'Videos') {
+                              setActiveDescTab('Videos');
                               setShowVideoPickerModal(true);
+                              return;
+                            }
+                            setActiveDescTab((prev) => (prev === tab.key ? null : tab.key));
+                            if (tab.key === '#Hashtags') {
+                              setUploadTitle((prev) => {
+                                if (prev.endsWith('#')) return prev;
+                                return !prev || /\s$/.test(prev) ? `${prev}#` : `${prev} #`;
+                              });
+                            } else if (tab.key === '@Mention') {
+                              setUploadTitle((prev) => {
+                                if (prev.endsWith('@')) return prev;
+                                return !prev || /\s$/.test(prev) ? `${prev}@` : `${prev} @`;
+                              });
                             }
                           }}
                           style={[flowStyles.ttTab, on && flowStyles.ttTabActive]}
                         >
-                          <Ionicons name={tab.icon} size={10} color={on ? '#fff' : '#777'} style={{ marginRight: 2 }} />
+                          <Ionicons name={tab.icon as any} size={13} color={on ? '#fff' : '#ccc'} style={{ marginRight: 4 }} />
                           <Text style={[flowStyles.ttTabText, on && flowStyles.ttTabTextActive]}>{tab.key}</Text>
                         </TouchableOpacity>
                       );
@@ -17385,23 +17770,108 @@ useEffect(() => {
                 </View>
                 {/* Thumbnail with Select cover badge */}
                 <TouchableOpacity style={flowStyles.ttThumb} onPress={() => setShowCoverSelection(true)} activeOpacity={0.85}>
-                  {recordedVideoUri ? <Video source={{ uri: recordedVideoUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" shouldPlay={false} positionMillis={coverFramePosition * 1000} useNativeControls={false} /> : <View style={{ width: '100%', height: '100%', backgroundColor: '#222' }} />}
+                  {selectedCoverUri ? (
+                    <Image source={{ uri: selectedCoverUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                  ) : recordedVideoUri ? (
+                    <Video
+                      ref={coverThumbVideoRef}
+                      source={{ uri: recordedVideoUri }}
+                      style={{ width: '100%', height: '100%' }}
+                      resizeMode="cover"
+                      shouldPlay={false}
+                      isMuted
+                      positionMillis={Math.round(coverFramePosition * 1000)}
+                      useNativeControls={false}
+                    />
+                  ) : (
+                    <View style={{ width: '100%', height: '100%', backgroundColor: '#222' }} />
+                  )}
                   <View style={flowStyles.ttSelectCoverBadge}>
                     <Text style={flowStyles.ttSelectCoverText}>Select cover</Text>
                   </View>
                 </TouchableOpacity>
               </View>
 
+              {/* Inline quick-pick strip for #Hashtags or @Mention */}
+              {activeDescTab === '#Hashtags' && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 10, gap: 8 }}
+                >
+                  {postHashtagSuggestions.map((tag) => (
+                    <TouchableOpacity
+                      key={tag}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        setUploadTitle((prev) => {
+                          const base = prev.endsWith('#') ? prev.slice(0, -1) : prev;
+                          const spacer = !base || /\s$/.test(base) ? '' : ' ';
+                          return `${base}${spacer}${tag} `;
+                        });
+                      }}
+                      style={{ backgroundColor: '#1f1f23', borderWidth: 1, borderColor: '#2e2e34', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{tag}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+
+              {activeDescTab === '@Mention' && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 10, gap: 8 }}
+                >
+                  {postTagCandidates.length === 0 ? (
+                    <TouchableOpacity
+                      onPress={() => setShowTagPeopleModal(true)}
+                      style={{ backgroundColor: '#1f1f23', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 }}
+                    >
+                      <Text style={{ color: '#aaa', fontSize: 12 }}>Search user ID in Tag people...</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    postTagCandidates.slice(0, 15).map((u) => (
+                      <TouchableOpacity
+                        key={u.handle}
+                        activeOpacity={0.75}
+                        onPress={() => {
+                          setUploadTitle((prev) => {
+                            const base = prev.endsWith('@') ? prev.slice(0, -1) : prev;
+                            const spacer = !base || /\s$/.test(base) ? '' : ' ';
+                            return `${base}${spacer}${u.handle} `;
+                          });
+                          setTaggedPeople((prev) => (prev.includes(u.handle) ? prev : [...prev, u.handle]));
+                        }}
+                        style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#1f1f23', borderWidth: 1, borderColor: '#2e2e34', borderRadius: 18, paddingHorizontal: 10, paddingVertical: 5, gap: 6 }}
+                      >
+                        {u.avatar ? (
+                          <Image source={{ uri: u.avatar }} style={{ width: 20, height: 20, borderRadius: 10 }} />
+                        ) : (
+                          <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#3a3a3c', alignItems: 'center', justifyContent: 'center' }}>
+                            <Ionicons name="person" size={12} color="#fff" />
+                          </View>
+                        )}
+                        <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{u.handle}</Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </ScrollView>
+              )}
+
               {/* ── LIST ROWS ── */}
               <View style={flowStyles.ttListCard}>
 
                 {/* Tag people */}
-                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowTagPeopleModal(true)}>
+                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowTagPeopleModal(true)} activeOpacity={0.75}>
                   <Ionicons name="person-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
                   <View style={{ flex: 1 }}>
                     <Text style={flowStyles.ttRowLabel}>Tag people</Text>
                     {taggedPeople.length > 0 && (
-                      <Text style={{ color: '#FE2C55', fontSize: 12, marginTop: 2 }}>{taggedPeople.join(', ')}</Text>
+                      <Text style={{ color: '#FE2C55', fontSize: 12, marginTop: 2 }} numberOfLines={1}>{taggedPeople.join(', ')}</Text>
                     )}
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#bbb" />
@@ -17409,12 +17879,14 @@ useEffect(() => {
                 <View style={flowStyles.ttDivider} />
 
                 {/* Add link */}
-                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowAddLinkModal(true)}>
+                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowAddLinkModal(true)} activeOpacity={0.75}>
                   <Ionicons name="add-circle-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
                   <View style={{ flex: 1 }}>
                     <Text style={flowStyles.ttRowLabel}>Add link</Text>
                     {savedLinks.length > 0 && (
-                      <Text style={{ color: '#FE2C55', fontSize: 12, marginTop: 2 }}>{savedLinks[0].title || savedLinks[0].url}</Text>
+                      <Text style={{ color: '#FE2C55', fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                        {savedLinks.length > 1 ? `${savedLinks[0].title || savedLinks[0].url} (+${savedLinks.length - 1})` : (savedLinks[0].title || savedLinks[0].url)}
+                      </Text>
                     )}
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#bbb" />
@@ -17425,6 +17897,7 @@ useEffect(() => {
                 <TouchableOpacity
                   style={flowStyles.ttRow}
                   onPress={() => setShowPrivacySheet(true)}
+                  activeOpacity={0.75}
                 >
                   <Ionicons name="eye-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
                   <Text style={flowStyles.ttRowLabel}>Who can watch this video</Text>
@@ -17436,9 +17909,12 @@ useEffect(() => {
                 <View style={flowStyles.ttDivider} />
 
                 {/* Hide like */}
-                <View style={flowStyles.ttRow}>
+                <TouchableOpacity style={flowStyles.ttRow} activeOpacity={0.75} onPress={() => setAllowLikes(v => !v)}>
                   <Ionicons name="heart-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
-                  <Text style={flowStyles.ttRowLabel}>Hide like</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttRowLabel}>Hide like</Text>
+                    <Text style={flowStyles.ttRowSubLine}>Only you will see total likes</Text>
+                  </View>
                   <Switch
                     value={!allowLikes}
                     onValueChange={v => setAllowLikes(!v)}
@@ -17446,13 +17922,16 @@ useEffect(() => {
                     thumbColor="#fff"
                     ios_backgroundColor="#3a3a3a"
                   />
-                </View>
+                </TouchableOpacity>
                 <View style={flowStyles.ttDivider} />
 
                 {/* Hide comment */}
-                <View style={flowStyles.ttRow}>
+                <TouchableOpacity style={flowStyles.ttRow} activeOpacity={0.75} onPress={() => setAllowComments(v => !v)}>
                   <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
-                  <Text style={flowStyles.ttRowLabel}>Hide comment</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttRowLabel}>Hide comment</Text>
+                    <Text style={flowStyles.ttRowSubLine}>Only you will see comment count</Text>
+                  </View>
                   <Switch
                     value={!allowComments}
                     onValueChange={v => setAllowComments(!v)}
@@ -17460,27 +17939,33 @@ useEffect(() => {
                     thumbColor="#fff"
                     ios_backgroundColor="#3a3a3a"
                   />
-                </View>
+                </TouchableOpacity>
                 <View style={flowStyles.ttDivider} />
 
                 {/* Hide save */}
-                <View style={flowStyles.ttRow}>
+                <TouchableOpacity style={flowStyles.ttRow} activeOpacity={0.75} onPress={() => setAllowSaves(v => !v)}>
                   <Ionicons name="bookmark-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
-                  <Text style={flowStyles.ttRowLabel}>Hide save</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttRowLabel}>Hide save</Text>
+                    <Text style={flowStyles.ttRowSubLine}>Only you will see save count</Text>
+                  </View>
                   <Switch
-                    value={hideLikeCount}
-                    onValueChange={setHideLikeCount}
+                    value={!allowSaves}
+                    onValueChange={v => setAllowSaves(!v)}
                     trackColor={{ false: '#3a3a3a', true: '#FE2C55' }}
                     thumbColor="#fff"
                     ios_backgroundColor="#3a3a3a"
                   />
-                </View>
+                </TouchableOpacity>
                 <View style={flowStyles.ttDivider} />
 
                 {/* Hide share */}
-                <View style={flowStyles.ttRow}>
+                <TouchableOpacity style={flowStyles.ttRow} activeOpacity={0.75} onPress={() => setAllowShares(v => !v)}>
                   <Ionicons name="share-social-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
-                  <Text style={flowStyles.ttRowLabel}>Hide share</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttRowLabel}>Hide share</Text>
+                    <Text style={flowStyles.ttRowSubLine}>Only you will see share count</Text>
+                  </View>
                   <Switch
                     value={!allowShares}
                     onValueChange={v => setAllowShares(!v)}
@@ -17488,17 +17973,24 @@ useEffect(() => {
                     thumbColor="#fff"
                     ios_backgroundColor="#3a3a3a"
                   />
-                </View>
+                </TouchableOpacity>
                 <View style={flowStyles.ttDivider} />
 
                 {/* More options */}
-                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowMoreOptions(true)}>
+                <TouchableOpacity style={flowStyles.ttRow} onPress={() => setShowMoreOptions(true)} activeOpacity={0.75}>
                   <Ionicons name="ellipsis-horizontal-circle-outline" size={20} color="#fff" style={flowStyles.ttRowIcon} />
                   <View style={{ flex: 1 }}>
                     <Text style={flowStyles.ttRowLabel}>More options</Text>
-                    <Text style={flowStyles.ttRowSubLine}>
-                      {allowHighQuality ? '✅ High quality on' : 'Manage upload quality'}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 5 }}>
+                      <Ionicons name={allowHighQuality ? 'checkmark-circle' : 'options-outline'} size={13} color={allowHighQuality ? '#4CD964' : '#888'} />
+                      <Text style={[flowStyles.ttRowSubLine, { marginTop: 0 }]}>
+                        {[
+                          allowHighQuality ? 'High quality on' : 'Standard quality',
+                          brandedContent ? 'Branded' : null,
+                          saveToDeviceEnabled ? 'Auto-save' : null,
+                        ].filter(Boolean).join(' · ')}
+                      </Text>
+                    </View>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#bbb" />
                 </TouchableOpacity>
@@ -17541,24 +18033,7 @@ useEffect(() => {
 
           {/* ── BOTTOM BAR (fixed) ── */}
           <View style={[flowStyles.uploadBottomBar, { height: 90 + insets.bottom, paddingBottom: 16 + insets.bottom }]}>
-            <TouchableOpacity style={flowStyles.ttDraftsBtn} onPress={() =>
-              Alert.alert('Drafts', 'Video draft mein save karein?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Save Draft', onPress: () => {
-                  const newDraft = {
-                    id: Date.now().toString(),
-                    uri: recordedVideoUri,
-                    title: uploadTitle || 'Draft',
-                    savedAt: new Date().toISOString(),
-                  };
-                  setDrafts(prev => [newDraft, ...prev]);
-                  setRecordingFlowStep(null);
-                  setShowCamera(false);
-                  setRecordedVideoUri(null);
-                  showSuccessToast('Video draft mein save ho gaya.');
-                }},
-              ])
-            }>
+            <TouchableOpacity style={flowStyles.ttDraftsBtn} onPress={() => setShowPostDraftsSheet(true)} activeOpacity={0.8}>
               <Ionicons name="albums-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
               <Text style={flowStyles.ttDraftsBtnText}>Drafts</Text>
             </TouchableOpacity>
@@ -17566,10 +18041,54 @@ useEffect(() => {
               style={[flowStyles.uploadPostBtn, isUploading && { opacity: 0.55 }]}
               onPress={postVideoToFeed}
               disabled={isUploading}
+              activeOpacity={0.85}
             >
               <Text style={flowStyles.uploadPostText}>Post</Text>
             </TouchableOpacity>
           </View>
+
+          {/* ── DRAFTS ACTION SHEET ── */}
+          <Modal visible={showPostDraftsSheet} animationType="slide" transparent onRequestClose={() => setShowPostDraftsSheet(false)}>
+            <TouchableOpacity style={flowStyles.ttModalOverlay} activeOpacity={1} onPress={() => setShowPostDraftsSheet(false)}>
+              <TouchableOpacity activeOpacity={1} style={flowStyles.ttMoreSheet}>
+                <View style={flowStyles.ttSheetHandle} />
+                <View style={flowStyles.ttSheetHeader}>
+                  <TouchableOpacity onPress={() => setShowPostDraftsSheet(false)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+                    <Ionicons name="close" size={22} color="#fff" />
+                  </TouchableOpacity>
+                  <Text style={flowStyles.ttSheetTitle}>Drafts</Text>
+                  <View style={{ width: 22 }} />
+                </View>
+                <TouchableOpacity
+                  style={flowStyles.ttSheetRow}
+                  activeOpacity={0.75}
+                  onPress={saveCurrentPostAsDraft}
+                >
+                  <Ionicons name="bookmark-outline" size={22} color="#FE2C55" style={{ marginRight: 14 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttSheetRowLabel}>Save to Drafts</Text>
+                    <Text style={flowStyles.ttSheetRowSub}>Caption, tags aur privacy settings ke saath save karein</Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: '#2A2A2A', marginLeft: 20 }} />
+                <TouchableOpacity
+                  style={flowStyles.ttSheetRow}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    setShowPostDraftsSheet(false);
+                    setShowDrafts(true);
+                  }}
+                >
+                  <Ionicons name="albums-outline" size={22} color="#ccc" style={{ marginRight: 14 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={flowStyles.ttSheetRowLabel}>View Saved Drafts ({drafts.length})</Text>
+                    <Text style={flowStyles.ttSheetRowSub}>Pehle se save kiye gaye drafts kholen</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#888" />
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </Modal>
 
           {/* ── MORE OPTIONS BOTTOM SHEET ── */}
           <Modal visible={showMoreOptions} animationType="slide" transparent onRequestClose={() => setShowMoreOptions(false)}>
@@ -17587,16 +18106,23 @@ useEffect(() => {
                 {/* Save to device */}
                 <TouchableOpacity
                   style={flowStyles.ttSheetRow}
-                  onPress={() => { setShowMoreOptions(false); setTimeout(saveVideoToDevice, 300); }}
+                  onPress={() => {
+                    setSaveToDeviceEnabled((prev) => {
+                      const next = !prev;
+                      if (next) void saveVideoToDevice();
+                      return next;
+                    });
+                  }}
                   activeOpacity={0.75}
                 >
                   <Ionicons name="download-outline" size={20} color="#ccc" style={{ marginRight: 14 }} />
                   <View style={{ flex: 1 }}>
                     <Text style={flowStyles.ttSheetRowLabel}>Save to device</Text>
+                    <Text style={flowStyles.ttSheetRowSub}>Post ke saath device me save karein</Text>
                   </View>
                   <Switch
                     value={saveToDeviceEnabled}
-                    onValueChange={(v) => { setSaveToDeviceEnabled(v); if (v) { setTimeout(saveVideoToDevice, 300); } }}
+                    onValueChange={(v) => { setSaveToDeviceEnabled(v); if (v) { void saveVideoToDevice(); } }}
                     trackColor={{ false: '#3a3a3a', true: '#4CD964' }}
                     thumbColor="#fff"
                     ios_backgroundColor="#3a3a3a"
@@ -17664,15 +18190,15 @@ useEffect(() => {
                 {[
                   { key: 'public',   label: 'Everyone', icon: 'earth-outline' },
                   { key: 'friends',  label: 'Friends',  icon: 'people-outline' },
-                  { key: 'private',  label: 'Private',  icon: 'lock-closed-outline' },
-                ].map((opt, idx, arr) => (
+                  { key: 'private',  label: 'Only Me',  icon: 'lock-closed-outline' },
+                ].map((opt) => (
                   <TouchableOpacity
                     key={opt.key}
                     style={[flowStyles.ttSheetRow, { paddingVertical: 18 }]}
                     activeOpacity={0.75}
                     onPress={() => { setPrivacySetting(opt.key); setShowPrivacySheet(false); }}
                   >
-                    <Ionicons name={opt.icon} size={22} color="#ccc" style={{ marginRight: 16 }} />
+                    <Ionicons name={opt.icon as any} size={22} color="#ccc" style={{ marginRight: 16 }} />
                     <Text style={[flowStyles.ttSheetRowLabel, { fontSize: 16 }]}>{opt.label}</Text>
                     {privacySetting === opt.key && (
                       <Ionicons name="checkmark" size={22} color="#FE2C55" style={{ marginLeft: 'auto' }} />
@@ -17692,37 +18218,33 @@ useEffect(() => {
                   <TouchableOpacity onPress={() => setShowVideoPickerModal(false)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
                     <Ionicons name="close" size={22} color="#fff" />
                   </TouchableOpacity>
-                  <Text style={flowStyles.ttSheetTitle}>Apne Videos</Text>
+                  <Text style={flowStyles.ttSheetTitle}>Tag a Video</Text>
                   <View style={{ width: 22 }} />
                 </View>
                 <FlatList
-                  data={videos.filter(v => v.user === userId)}
-                  keyExtractor={item => item.id}
+                  data={ownerOrFeedVideos}
+                  keyExtractor={(item) => String(item.id)}
                   style={{ width: '100%' }}
                   ListEmptyComponent={
-                    <Text style={{ color: '#aaa', textAlign: 'center', marginTop: 24 }}>Koi video nahi mila</Text>
+                    <Text style={{ color: '#aaa', textAlign: 'center', marginTop: 24, marginBottom: 24 }}>Koi video nahi mila</Text>
                   }
                   renderItem={({ item }) => (
                     <TouchableOpacity
-                      style={[flowStyles.ttSheetRow, { paddingVertical: 14, alignItems: 'center' }]}
+                      style={[flowStyles.ttSheetRow, { paddingVertical: 12, alignItems: 'center' }]}
                       activeOpacity={0.75}
                       onPress={() => {
                         const link = getMastiVideoAppLink(item.id);
-                        setUploadTitle(prev => prev ? prev + ' ' + link : link);
+                        setUploadTitle(prev => prev ? `${prev} ${link}` : link);
                         setShowVideoPickerModal(false);
+                        showSuccessToast('Video link caption mein add ho gayi!');
                       }}
                     >
-                      <View style={{ width: 56, height: 72, backgroundColor: '#222', borderRadius: 8, marginRight: 14, overflow: 'hidden', flexShrink: 0 }}>
-                        {item.profileImage ? (
-                          <Image source={{ uri: item.profileImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-                        ) : null}
-                        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.45)', paddingVertical: 2, alignItems: 'center' }}>
-                          <Ionicons name="videocam" size={14} color="#fff" />
-                        </View>
+                      <View style={{ width: 56, height: 74, backgroundColor: '#222', borderRadius: 8, marginRight: 14, overflow: 'hidden', flexShrink: 0 }}>
+                        <SearchVideoThumbnail item={item} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[flowStyles.ttSheetRowLabel, { fontSize: 14 }]} numberOfLines={2}>{item.desc || item.name || 'Video'}</Text>
-                        <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>{getMastiVideoAppLink(item.id)}</Text>
+                        <Text style={[flowStyles.ttSheetRowLabel, { fontSize: 14 }]} numberOfLines={2}>{item.desc || item.title || item.name || 'Video'}</Text>
+                        <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>{item.user || item.userId || getMastiVideoAppLink(item.id)}</Text>
                       </View>
                       <Ionicons name="link-outline" size={18} color="#FE2C55" style={{ marginLeft: 10 }} />
                     </TouchableOpacity>
@@ -17736,29 +18258,91 @@ useEffect(() => {
           <Modal visible={showCoverSelection} animationType="slide" transparent onRequestClose={() => setShowCoverSelection(false)}>
             <View style={flowStyles.coverModalBg}>
               <View style={flowStyles.coverModalContent}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                   <Text style={flowStyles.coverModalTitle}>Select Cover Frame</Text>
-                  <TouchableOpacity onPress={() => setShowCoverSelection(false)}>
+                  <TouchableOpacity onPress={() => setShowCoverSelection(false)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
                     <Ionicons name="close" size={26} color="#fff" />
                   </TouchableOpacity>
                 </View>
                 <Video
+                  ref={coverModalVideoRef}
                   source={{ uri: recordedVideoUri }}
-                  style={{ width: width * 0.52, height: width * 0.52 * (16 / 9), alignSelf: 'center', borderRadius: 12, backgroundColor: '#000' }}
+                  style={{ width: width * 0.5, height: width * 0.5 * (16 / 9), alignSelf: 'center', borderRadius: 12, backgroundColor: '#000' }}
                   resizeMode="cover"
-                  shouldPlay
-                  isLooping
-                  positionMillis={coverFramePosition * 1000}
+                  shouldPlay={false}
+                  isLooping={false}
+                  isMuted
+                  positionMillis={Math.round(coverFramePosition * 1000)}
                   useNativeControls={false}
+                  onLoad={(status: any) => {
+                    const durMs = status?.durationMillis || reviewVideoDurationMsRef.current || 15000;
+                    if (durMs > 500) {
+                      const durSec = Math.max(1, Math.round(durMs / 1000));
+                      coverVideoDurationSecRef.current = durSec;
+                      setCoverVideoDurationSec(durSec);
+                    }
+                    coverModalVideoRef.current?.setPositionAsync?.(Math.round(coverFramePosition * 1000))?.catch?.(() => {});
+                  }}
                 />
-                <Text style={flowStyles.coverSliderLabel}>Drag to pick a frame</Text>
-                <View style={flowStyles.coverSliderTrack}>
-                  <View
-                    style={[flowStyles.coverSliderThumb, { left: (coverFramePosition / 15) * (width - 80) - 12 }]}
-                    {...coverSliderPan.panHandlers}
-                  />
+                <Text style={flowStyles.coverSliderLabel}>
+                  Tap or drag to pick a frame · {formatSecLabel(coverFramePosition)} / {formatSecLabel(coverVideoDurationSec)}
+                </Text>
+                <View
+                  ref={coverSliderTrackRef}
+                  onLayout={(e) => {
+                    const lw = e.nativeEvent.layout.width;
+                    if (lw > 20) {
+                      setCoverSliderTrackWidth(lw);
+                      coverSliderMetricsRef.current.width = lw;
+                    }
+                    coverSliderTrackRef.current?.measureInWindow?.((x: number, _y: number, mw: number) => {
+                      if (mw > 20) coverSliderMetricsRef.current = { left: x, width: mw };
+                    });
+                  }}
+                  style={{ paddingVertical: 14, marginHorizontal: 16 }}
+                  {...coverSliderPan.panHandlers}
+                >
+                  <View style={[flowStyles.coverSliderTrack, { marginHorizontal: 0 }]}>
+                    <View
+                      style={{
+                        height: '100%',
+                        width: `${Math.min(100, Math.max(0, (coverFramePosition / Math.max(1, coverVideoDurationSec)) * 100))}%`,
+                        backgroundColor: '#FE2C55',
+                        borderRadius: 3,
+                      }}
+                    />
+                    <View
+                      style={[
+                        flowStyles.coverSliderThumb,
+                        {
+                          left: Math.max(
+                            0,
+                            Math.min(
+                              Math.max(0, coverSliderTrackWidth - 24),
+                              (coverFramePosition / Math.max(1, coverVideoDurationSec)) * Math.max(1, coverSliderTrackWidth - 24),
+                            ),
+                          ),
+                        },
+                      ]}
+                    />
+                  </View>
                 </View>
-                <TouchableOpacity style={flowStyles.coverSaveBtn} onPress={() => setShowCoverSelection(false)}>
+                <TouchableOpacity
+                  style={flowStyles.coverSaveBtn}
+                  onPress={async () => {
+                    const seekMs = Math.max(0, Math.round(coverFramePosition * 1000));
+                    try {
+                      const thumb = await VideoThumbnails.getThumbnailAsync(recordedVideoUri, {
+                        time: seekMs,
+                        quality: 0.85,
+                      });
+                      if (thumb?.uri) setSelectedCoverUri(thumb.uri);
+                    } catch {}
+                    coverThumbVideoRef.current?.setPositionAsync?.(seekMs)?.catch?.(() => {});
+                    setShowCoverSelection(false);
+                    showSuccessToast('Cover frame saved!');
+                  }}
+                >
                   <Text style={flowStyles.coverSaveBtnText}>Save Cover</Text>
                 </TouchableOpacity>
               </View>
@@ -17780,7 +18364,7 @@ useEffect(() => {
                   </TouchableOpacity>
                 </View>
                 {/* Search bar */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#262628', borderRadius: 8, paddingHorizontal: 12, height: 42, marginBottom: 14, marginTop: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#262628', borderRadius: 8, paddingHorizontal: 12, height: 42, marginBottom: 14, marginTop: 8, marginHorizontal: 16 }}>
                   <Ionicons name="search" size={18} color="#ffffff" style={{ marginRight: 8 }} />
                   <TextInput
                     style={[
@@ -17798,7 +18382,7 @@ useEffect(() => {
                         outlineWidth: 0,
                       } as any,
                     ]}
-                    placeholder="Search friends..."
+                    placeholder="Search name or @user ID..."
                     placeholderTextColor="#8e8e93"
                     value={tagSearchText}
                     onChangeText={setTagSearchText}
@@ -17813,7 +18397,7 @@ useEffect(() => {
                 </View>
                 {/* Tagged people chips */}
                 {taggedPeople.length > 0 && (
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12, paddingHorizontal: 16 }}>
                     {taggedPeople.map((person, pIdx) => (
                       <TouchableOpacity
                         key={`${person}-${pIdx}`}
@@ -17826,123 +18410,152 @@ useEffect(() => {
                     ))}
                   </View>
                 )}
-                {/* Suggested users list */}
-                {[
-                  { name: '@rahul_sharma', avatar: 'R' },
-                  { name: '@priya.456', avatar: 'P' },
-                  { name: '@dev_rocks99', avatar: 'D' },
-                  { name: '@sunita_jain', avatar: 'S' },
-                  { name: '@vikas_2026', avatar: 'V' },
-                  { name: '@neha_star', avatar: 'N' },
-                  { name: '@amit_king07', avatar: 'A' },
-                ].filter(u => tagSearchText.length === 0 || u.name.toLowerCase().includes(tagSearchText.toLowerCase()))
-                  .map((user, i, arr) => {
-                    const isTagged = taggedPeople.includes(user.name);
-                    return (
-                      <TouchableOpacity
-                        key={`${user.name}-${i}`}
-                        style={[flowStyles.ttSheetRow, { paddingVertical: 12 }, i < arr.length - 1 && { borderBottomWidth: 0.5, borderBottomColor: '#2A2A2A' }]}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          if (isTagged) {
-                            setTaggedPeople(prev => prev.filter(p => p !== user.name));
-                          } else {
-                            setTaggedPeople(prev => [...prev, user.name]);
-                            setTagSearchText('');
-                          }
-                        }}
-                      >
-                        <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#FE2C55', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>{user.avatar}</Text>
-                        </View>
-                        <Text style={[flowStyles.ttSheetRowLabel, { flex: 1 }]}>{user.name}</Text>
-                        {isTagged && <Ionicons name="checkmark-circle" size={22} color="#FE2C55" />}
-                      </TouchableOpacity>
-                    );
-                  })}
-                {tagSearchLoading && (
-                  <View style={styles.circularLoaderOverlay} pointerEvents="none">
-                    <ActivityIndicator size="large" color="#fff" />
-                  </View>
-                )}
+                {/* Live users list */}
+                <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                  {showCustomTagRow && (
+                    <TouchableOpacity
+                      style={[flowStyles.ttSheetRow, { paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#2A2A2A' }]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        const nextHandle = `@${customTagHandle}`;
+                        setTaggedPeople((prev) => (prev.includes(nextHandle) ? prev : [...prev, nextHandle]));
+                        setTagSearchText('');
+                      }}
+                    >
+                      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#FE2C55', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
+                        <Ionicons name="at" size={20} color="#fff" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={flowStyles.ttSheetRowLabel}>Tag @{customTagHandle}</Text>
+                        <Text style={{ color: '#888', fontSize: 12 }}>Custom user ID</Text>
+                      </View>
+                      <Ionicons name="add-circle-outline" size={22} color="#FE2C55" />
+                    </TouchableOpacity>
+                  )}
+                  {filteredTagUsers.length === 0 && !showCustomTagRow ? (
+                    <Text style={{ color: '#888', textAlign: 'center', paddingVertical: 28 }}>Koi user nahi mila</Text>
+                  ) : (
+                    filteredTagUsers.map((user, i, arr) => {
+                      const isTagged = taggedPeople.includes(user.handle);
+                      return (
+                        <TouchableOpacity
+                          key={`${user.handle}-${i}`}
+                          style={[flowStyles.ttSheetRow, { paddingVertical: 12 }, i < arr.length - 1 && { borderBottomWidth: 0.5, borderBottomColor: '#2A2A2A' }]}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            if (isTagged) {
+                              setTaggedPeople(prev => prev.filter(p => p !== user.handle));
+                            } else {
+                              setTaggedPeople(prev => [...prev, user.handle]);
+                              setTagSearchText('');
+                            }
+                          }}
+                        >
+                          {user.avatar ? (
+                            <Image source={{ uri: user.avatar }} style={{ width: 40, height: 40, borderRadius: 20, marginRight: 14, backgroundColor: '#2c2c2e' }} />
+                          ) : (
+                            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#3a3a3c', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
+                              <Ionicons name="person" size={20} color="#fff" />
+                            </View>
+                          )}
+                          <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                              <Text style={flowStyles.ttSheetRowLabel} numberOfLines={1}>{user.name}</Text>
+                              {user.isVerified && <VerifiedBadge size={14} />}
+                            </View>
+                            <Text style={{ color: '#8e8e93', fontSize: 12, marginTop: 1 }} numberOfLines={1}>{user.handle}</Text>
+                          </View>
+                          {isTagged && <Ionicons name="checkmark-circle" size={22} color="#FE2C55" />}
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </ScrollView>
               </TouchableOpacity>
             </TouchableOpacity>
           </Modal>
 
           {/* ── ADD LINK MODAL ── */}
           <Modal visible={showAddLinkModal} animationType="slide" transparent onRequestClose={() => setShowAddLinkModal(false)}>
-            <TouchableOpacity style={flowStyles.ttModalOverlay} activeOpacity={1} onPress={() => setShowAddLinkModal(false)}>
-              <TouchableOpacity activeOpacity={1} style={flowStyles.ttMoreSheet}>
-                <View style={flowStyles.ttSheetHandle} />
-                <View style={flowStyles.ttSheetHeader}>
-                  <TouchableOpacity onPress={() => setShowAddLinkModal(false)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
-                    <Ionicons name="close" size={22} color="#fff" />
-                  </TouchableOpacity>
-                  <Text style={flowStyles.ttSheetTitle}>Add Link</Text>
-                  <View style={{ width: 22 }} />
-                </View>
-
-                <Text style={{ color: '#888', fontSize: 13, marginBottom: 10 }}>Link title</Text>
-                <View style={{ backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, marginBottom: 14 }}>
-                  <TextInput
-                    style={{ color: '#fff', fontSize: 15, paddingVertical: 12 }}
-                    placeholder="e.g. My Channel"
-                    placeholderTextColor="#555"
-                    value={linkTitle}
-                    onChangeText={setLinkTitle}
-                  />
-                </View>
-
-                <Text style={{ color: '#888', fontSize: 13, marginBottom: 10 }}>URL</Text>
-                <View style={{ backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, marginBottom: 20 }}>
-                  <TextInput
-                    style={{ color: '#fff', fontSize: 15, paddingVertical: 12 }}
-                    placeholder="https://..."
-                    placeholderTextColor="#555"
-                    value={linkUrl}
-                    onChangeText={setLinkUrl}
-                    keyboardType="url"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-
-                {/* Saved links */}
-                {savedLinks.length > 0 && (
-                  <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>Added links</Text>
-                    {savedLinks.map((link, i) => (
-                      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 8 }}>
-                        <Ionicons name="link-outline" size={16} color="#FE2C55" style={{ marginRight: 10 }} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>{link.title || 'Link'}</Text>
-                          <Text style={{ color: '#888', fontSize: 11 }} numberOfLines={1}>{link.url}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => setSavedLinks(prev => prev.filter((_, idx) => idx !== i))} hitSlop={10}>
-                          <Ionicons name="trash-outline" size={16} color="#ff4444" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+              <TouchableOpacity style={flowStyles.ttModalOverlay} activeOpacity={1} onPress={() => setShowAddLinkModal(false)}>
+                <TouchableOpacity activeOpacity={1} style={[flowStyles.ttMoreSheet, { maxHeight: '85%', paddingHorizontal: 16 }]}>
+                  <View style={flowStyles.ttSheetHandle} />
+                  <View style={[flowStyles.ttSheetHeader, { paddingHorizontal: 4 }]}>
+                    <TouchableOpacity onPress={() => setShowAddLinkModal(false)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+                      <Ionicons name="close" size={22} color="#fff" />
+                    </TouchableOpacity>
+                    <Text style={flowStyles.ttSheetTitle}>Add Link</Text>
+                    <View style={{ width: 22 }} />
                   </View>
-                )}
 
-                <TouchableOpacity
-                  style={[flowStyles.coverSaveBtn, { opacity: linkUrl.trim().length > 0 ? 1 : 0.4 }]}
-                  disabled={linkUrl.trim().length === 0}
-                  onPress={() => {
-                    if (linkUrl.trim()) {
-                      setSavedLinks(prev => [...prev, { title: linkTitle.trim() || linkUrl.trim(), url: linkUrl.trim() }]);
-                      setLinkUrl('');
-                      setLinkTitle('');
-                      setShowAddLinkModal(false);
-                      showSuccessToast('Link successfully added to your video.');
-                    }
-                  }}
-                >
-                  <Text style={flowStyles.coverSaveBtnText}>Add Link</Text>
+                  <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingTop: 14, paddingBottom: 12 }}>
+                    <Text style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>Link title</Text>
+                    <View style={{ backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, marginBottom: 14 }}>
+                      <TextInput
+                        style={{ color: '#fff', fontSize: 15, paddingVertical: 12 }}
+                        placeholder="e.g. My Channel"
+                        placeholderTextColor="#666"
+                        value={linkTitle}
+                        onChangeText={setLinkTitle}
+                      />
+                    </View>
+
+                    <Text style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>URL</Text>
+                    <View style={{ backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, marginBottom: 18 }}>
+                      <TextInput
+                        style={{ color: '#fff', fontSize: 15, paddingVertical: 12 }}
+                        placeholder="https://example.com"
+                        placeholderTextColor="#666"
+                        value={linkUrl}
+                        onChangeText={setLinkUrl}
+                        keyboardType="url"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                    </View>
+
+                    {/* Saved links */}
+                    {savedLinks.length > 0 && (
+                      <View style={{ marginBottom: 16 }}>
+                        <Text style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>Added links</Text>
+                        {savedLinks.map((link, i) => (
+                          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#2A2A2A', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 8 }}>
+                            <Ionicons name="link-outline" size={16} color="#FE2C55" style={{ marginRight: 10 }} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>{link.title || 'Link'}</Text>
+                              <Text style={{ color: '#888', fontSize: 11 }} numberOfLines={1}>{link.url}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setSavedLinks(prev => prev.filter((_, idx) => idx !== i))} hitSlop={10}>
+                              <Ionicons name="trash-outline" size={16} color="#ff4444" />
+                            </TouchableOpacity>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    <TouchableOpacity
+                      style={[flowStyles.coverSaveBtn, { opacity: linkUrl.trim().length > 0 ? 1 : 0.4, marginTop: 8 }]}
+                      disabled={linkUrl.trim().length === 0}
+                      onPress={() => {
+                        const normalized = normalizeExternalLinkUrl(linkUrl);
+                        if (!normalized) {
+                          showSuccessToast('Valid link URL daalein (e.g. https://...)');
+                          return;
+                        }
+                        setSavedLinks(prev => [...prev, { title: linkTitle.trim() || normalized, url: normalized }]);
+                        setLinkUrl('');
+                        setLinkTitle('');
+                        setShowAddLinkModal(false);
+                        showSuccessToast('Link successfully added to your video.');
+                      }}
+                    >
+                      <Text style={flowStyles.coverSaveBtnText}>Add Link</Text>
+                    </TouchableOpacity>
+                  </ScrollView>
                 </TouchableOpacity>
               </TouchableOpacity>
-            </TouchableOpacity>
+            </KeyboardAvoidingView>
           </Modal>
 
         </View>
@@ -20194,7 +20807,7 @@ const FiltersModal = () => {
                     </View>
                   </TouchableOpacity>
 
-                  {/* Like / Heart — live count */}
+                  {/* Like / Heart — button always works, count only if not hidden or viewer is owner */}
                   <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => requireAuth(() => handleLike(fsVideo))}>
                     <Animated.View style={{ transform: [{ scale: likeScale }] }}>
                       <Ionicons
@@ -20203,18 +20816,22 @@ const FiltersModal = () => {
                         color={fsIsLiked ? '#FE2C55' : '#fff'}
                       />
                     </Animated.View>
-                    <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>
-                      {fsLikeCount}
-                    </Text>
+                    {(!fsVideo.hideLikes || isVideoOwnedByCurrentUser(fsVideo)) && (
+                      <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>
+                        {fsLikeCount}
+                      </Text>
+                    )}
                   </TouchableOpacity>
 
-                  {/* Comment — live count */}
+                  {/* Comment — button always works, count only if not hidden or viewer is owner */}
                   <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => requireAuth(() => openVideoComments(fsVideo))}>
                     <Ionicons name="chatbubble-ellipses" size={32} color="#ffffff" />
-                    <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsCommentCount}</Text>
+                    {(!fsVideo.hideComments || isVideoOwnedByCurrentUser(fsVideo)) && (
+                      <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsCommentCount}</Text>
+                    )}
                   </TouchableOpacity>
 
-                  {/* Bookmark / Save — live count */}
+                  {/* Bookmark / Save — button always works, count only if not hidden or viewer is owner */}
                   <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => requireAuth(() => handleSave(fsVideo))}>
                     <Animated.View style={{ transform: [{ scale: saveScale }] }}>
                       <Ionicons
@@ -20223,13 +20840,17 @@ const FiltersModal = () => {
                         color="#ffffff"
                       />
                     </Animated.View>
-                    <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsSaveCount}</Text>
+                    {(!fsVideo.hideSaves || isVideoOwnedByCurrentUser(fsVideo)) && (
+                      <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsSaveCount}</Text>
+                    )}
                   </TouchableOpacity>
 
-                  {/* Share / Paper-plane — live count */}
+                  {/* Share / Paper-plane — button always works, count only if not hidden or viewer is owner */}
                   <TouchableOpacity style={{ alignItems: 'center' }} onPress={() => { setCurrentVideoItem(fsVideo); setShareOpenedFromProfile(false); setShowShare(true); }}>
                     <Ionicons name="paper-plane-outline" size={31} color="#fff" />
-                    <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsShareCount}</Text>
+                    {(!fsVideo.hideShares || isVideoOwnedByCurrentUser(fsVideo)) && (
+                      <Text style={{ color: '#fff', fontSize: 12, marginTop: 3, fontWeight: '600' }}>{fsShareCount}</Text>
+                    )}
                   </TouchableOpacity>
 
                   {/* Music / Audio disc — TikTok/Instagram style spinning */}
@@ -22728,26 +23349,49 @@ setShowCamera(true);
               );
             })()}
           </TouchableOpacity>
+          {/* Like button always visible and tappable for everyone */}
           <TouchableOpacity style={styles.actionItem} onPress={() => requireAuth(() => handleLike(item))}>
             <Ionicons name={isLiked? "heart" : "heart-outline"} size={33} color={isLiked ? "#FE2C55" : "white"} />
-            <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>{liveLikeCounts[item.id] ?? item.likes ?? 0}</Text>
+            {(!item.hideLikes || isVideoOwnedByCurrentUser(item)) && (
+              <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>
+                {liveLikeCounts[item.id] ?? item.likes ?? 0}
+              </Text>
+            )}
           </TouchableOpacity>
+
+          {/* Comment button always visible and tappable for everyone */}
           <TouchableOpacity style={styles.actionItem} activeOpacity={0.8} onPress={() => requireAuth(() => openVideoComments(item))}>
             <View style={{ alignItems: 'center', justifyContent: 'center' }}>
               <Ionicons name="chatbubble-ellipses" size={31} color="#ffffff" />
             </View>
-            <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>{Math.max(
-              videoComments[item.id]?.length ?? 0,
-              mastiBaseCount(item.social?.comments ?? item.comments) ?? 0,
-            )}</Text>
+            {(!item.hideComments || isVideoOwnedByCurrentUser(item)) && (
+              <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>
+                {Math.max(
+                  videoComments[item.id]?.length ?? 0,
+                  mastiBaseCount(item.social?.comments ?? item.comments) ?? 0,
+                )}
+              </Text>
+            )}
           </TouchableOpacity>
+
+          {/* Save/Bookmark button always visible and tappable for everyone */}
           <TouchableOpacity style={styles.actionItem} activeOpacity={0.8} onPress={() => requireAuth(() => handleSave(item))}>
             <Ionicons name={isSaved ? "bookmark" : "bookmark-outline"} size={31} color="#ffffff" />
-            <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>{saveCounts[item.id] ?? item.social?.saves ?? item.saves ?? 0}</Text>
+            {(!item.hideSaves || isVideoOwnedByCurrentUser(item)) && (
+              <Text style={[styles.actionText, { fontSize: 13, marginTop: 3, fontWeight: '700', textShadowColor: 'rgba(0,0,0,0.85)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }]}>
+                {saveCounts[item.id] ?? item.social?.saves ?? item.saves ?? 0}
+              </Text>
+            )}
           </TouchableOpacity>
+
+          {/* Share button always visible and tappable for everyone */}
           <TouchableOpacity style={styles.actionItem} onPress={() => requireAuth(() => { setCurrentVideoItem(item); setShareOpenedFromProfile(Boolean(profilePlaybackUserId)); setShowShare(true); })}>
             <Ionicons name="paper-plane" size={30} color="white" />
-            <Text style={styles.actionText}>{shareCounts[item.id] ?? item.social?.shares ?? item.shares ?? 0}</Text>
+            {(!item.hideShares || isVideoOwnedByCurrentUser(item)) && (
+              <Text style={styles.actionText}>
+                {shareCounts[item.id] ?? item.social?.shares ?? item.shares ?? 0}
+              </Text>
+            )}
           </TouchableOpacity>
           <TouchableOpacity style={styles.musicDiscContainer} onPress={() => { setCurrentVideoItem(item); setShowSoundDetail(true); }} activeOpacity={0.85}>
             {/* Album cover card with music note in center (as in user's photo) */}
@@ -22804,23 +23448,40 @@ setShowCamera(true);
           </TouchableOpacity>
         </View>
         <View style={[styles.userInfo, { bottom: 100 + insets.bottom }]}>
-          {item.isSponsored && (
-            <View style={{
-              alignSelf: 'flex-start',
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: 'rgba(0,0,0,0.58)',
-              borderRadius: 5,
-              paddingHorizontal: 7,
-              paddingVertical: 3,
-              marginBottom: 5,
-            }}>
-              <Ionicons name="megaphone-outline" size={11} color="#ddd" style={{ marginRight: 4 }} />
-              <Text style={{ color: '#ddd', fontSize: 11, fontWeight: '700', letterSpacing: 0.2 }}>
-                Sponsored
-              </Text>
-            </View>
-          )}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: (item.isSponsored || (item.privacy && item.privacy !== 'public' && isVideoOwnedByCurrentUser(item))) ? 5 : 0 }}>
+            {item.isSponsored && (
+              <View style={{
+                alignSelf: 'flex-start',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: 'rgba(0,0,0,0.58)',
+                borderRadius: 5,
+                paddingHorizontal: 7,
+                paddingVertical: 3,
+              }}>
+                <Ionicons name="megaphone-outline" size={11} color="#ddd" style={{ marginRight: 4 }} />
+                <Text style={{ color: '#ddd', fontSize: 11, fontWeight: '700', letterSpacing: 0.2 }}>
+                  Sponsored
+                </Text>
+              </View>
+            )}
+            {item.privacy && item.privacy !== 'public' && isVideoOwnedByCurrentUser(item) && (
+              <View style={{
+                alignSelf: 'flex-start',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: 'rgba(0,0,0,0.58)',
+                borderRadius: 5,
+                paddingHorizontal: 7,
+                paddingVertical: 3,
+              }}>
+                <Ionicons name={item.privacy === 'private' ? 'lock-closed-outline' : 'people-outline'} size={11} color="#ddd" style={{ marginRight: 4 }} />
+                <Text style={{ color: '#ddd', fontSize: 11, fontWeight: '700' }}>
+                  {item.privacy === 'private' ? 'Only Me' : 'Friends'}
+                </Text>
+              </View>
+            )}
+          </View>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <TouchableOpacity
               style={{ flexDirection: "row", alignItems: "center" }}
@@ -22900,6 +23561,53 @@ setShowCamera(true);
               </Text>
             </View>
           )}
+          {Array.isArray(item.taggedPeople) && item.taggedPeople.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 5 }}>
+              {item.taggedPeople.slice(0, 4).map((tagged: string, tIdx: number) => (
+                <TouchableOpacity
+                  key={`${tagged}-${tIdx}`}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    const cleanHandle = String(tagged).replace(/^@+/, '');
+                    const matched = postTagCandidates.find(
+                      (c) => c.handle.replace(/^@+/, '').toLowerCase() === cleanHandle.toLowerCase(),
+                    );
+                    openUserProfile({
+                      user: tagged.startsWith('@') ? tagged : `@${cleanHandle}`,
+                      userId: tagged.startsWith('@') ? tagged : `@${cleanHandle}`,
+                      name: matched?.name || cleanHandle,
+                      profileImage: matched?.avatar || '',
+                    });
+                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3 }}
+                >
+                  <Ionicons name="person" size={11} color="#fff" style={{ marginRight: 4 }} />
+                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{tagged}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {Array.isArray(item.links) && item.links.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 5 }}>
+              {item.links.slice(0, 2).map((lnk: any, lIdx: number) => {
+                const safeHref = normalizeExternalLinkUrl(lnk?.url || '');
+                if (!safeHref) return null;
+                return (
+                  <TouchableOpacity
+                    key={`${safeHref}-${lIdx}`}
+                    activeOpacity={0.85}
+                    onPress={() => Linking.openURL(safeHref).catch(() => showSuccessToast('Link open nahi ho saka'))}
+                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(254,44,85,0.85)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 }}
+                  >
+                    <Ionicons name="link-outline" size={12} color="#fff" style={{ marginRight: 4 }} />
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }} numberOfLines={1}>
+                      {lnk?.title || safeHref}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
           <MarqueeSongTitle 
             text={`🎵 ${item.song ? item.song.title + ' • ' + item.song.artist : 'Original Audio • ' + (item.name || item.user || 'Masti India')}`}
             textStyle={[styles.songName, themeFontFamily ? { fontFamily: themeFontFamily } : null]}
@@ -22908,7 +23616,7 @@ setShowCamera(true);
         </View>
       </View>
     );
-  }, [activeTab, adsConfig, likedVideos, savedVideos, followingUsers, expandedVideoDetailsId, currentVideoIndex, isSponsoredAdOverlayBlocked, selectedFilter, selectedEffect, videoComments, liveLikeCounts, viewCounts, shareCounts, saveCounts, showCamera, recordedVideoUri, isUploading, isManuallyPaused, showSoundDetail, requireAuth, skipSponsoredAdSlot, feedConnectivity, feedVideoStates, feedVideoRetryKeys, feedVideoProgressiveFallbacks, mastiVideoQuality, refetchBackendVideos, clearOfflineVideoGraceTimer, scheduleOfflineVideoError, finishInitialFeedLoading, isFeedInitialLoading, layoutPreviewIndex, profilePlaybackUserId, insets.top, insets.bottom, themeBorderRadius, themeFontFamily, themePrimaryColor, isDarkTheme, isCreatorVerified, width, height]);
+  }, [activeTab, adsConfig, likedVideos, savedVideos, followingUsers, expandedVideoDetailsId, currentVideoIndex, isSponsoredAdOverlayBlocked, selectedFilter, selectedEffect, videoComments, liveLikeCounts, viewCounts, shareCounts, saveCounts, showCamera, recordedVideoUri, isUploading, isManuallyPaused, showSoundDetail, requireAuth, skipSponsoredAdSlot, feedConnectivity, feedVideoStates, feedVideoRetryKeys, feedVideoProgressiveFallbacks, mastiVideoQuality, refetchBackendVideos, clearOfflineVideoGraceTimer, scheduleOfflineVideoError, finishInitialFeedLoading, isFeedInitialLoading, layoutPreviewIndex, profilePlaybackUserId, insets.top, insets.bottom, themeBorderRadius, themeFontFamily, themePrimaryColor, isDarkTheme, isCreatorVerified, isVideoOwnedByCurrentUser, postTagCandidates, width, height]);
 
   const renderRemoteLayoutItem = useCallback(({ item, index }) => {
     if (!item) return null;
@@ -25976,7 +26684,18 @@ setShowCamera(true);
                       setRecordedVideoUri(item.uri);
                       setRecordingFlowStep('upload');
                       setShowCamera(true);
-                      if (item.title) setUploadTitle(item.title);
+                      setUploadTitle(item.title || '');
+                      setPrivacySetting(item.privacySetting || 'public');
+                      setTaggedPeople(Array.isArray(item.taggedPeople) ? item.taggedPeople : []);
+                      setSavedLinks(Array.isArray(item.savedLinks) ? item.savedLinks : []);
+                      setCoverFramePosition(Number(item.coverFramePosition) || 0);
+                      setAllowLikes(item.allowLikes !== false);
+                      setAllowComments(item.allowComments !== false);
+                      setAllowSaves(item.allowSaves !== false);
+                      setAllowShares(item.allowShares !== false);
+                      setBrandedContent(Boolean(item.brandedContent));
+                      setAllowHighQuality(item.allowHighQuality !== false);
+                      if (item.selectedSong) setSelectedSong(item.selectedSong);
                     }}
                   >
                     {/* Thumbnail — portrait style like Reels */}
@@ -26014,10 +26733,7 @@ setShowCamera(true);
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={{ padding: 10 }}
-                      onPress={() => Alert.alert('Draft', item.title || 'Draft video', [
-                        { text: 'Delete', style: 'destructive', onPress: () => setDrafts(prev => prev.filter(d => d.id !== item.id)) },
-                        { text: 'Cancel', style: 'cancel' },
-                      ])}
+                      onPress={() => setDraftMenuTarget(item)}
                     >
                       <Ionicons name="ellipsis-horizontal" size={20} color="#bbb" />
                     </TouchableOpacity>
@@ -26515,7 +27231,18 @@ setShowCamera(true);
                     setRecordedVideoUri(item.uri);
                     setRecordingFlowStep('upload');
                     setShowCamera(true);
-                    if (item.title) setUploadTitle(item.title);
+                    setUploadTitle(item.title || '');
+                    setPrivacySetting(item.privacySetting || 'public');
+                    setTaggedPeople(Array.isArray(item.taggedPeople) ? item.taggedPeople : []);
+                    setSavedLinks(Array.isArray(item.savedLinks) ? item.savedLinks : []);
+                    setCoverFramePosition(Number(item.coverFramePosition) || 0);
+                    setAllowLikes(item.allowLikes !== false);
+                    setAllowComments(item.allowComments !== false);
+                    setAllowSaves(item.allowSaves !== false);
+                    setAllowShares(item.allowShares !== false);
+                    setBrandedContent(Boolean(item.brandedContent));
+                    setAllowHighQuality(item.allowHighQuality !== false);
+                    if (item.selectedSong) setSelectedSong(item.selectedSong);
                   }}
                 >
                   {/* Thumbnail — portrait style like Reels */}
@@ -26553,10 +27280,7 @@ setShowCamera(true);
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={{ padding: 10 }}
-                    onPress={() => Alert.alert('Draft', item.title || 'Draft video', [
-                      { text: 'Delete', style: 'destructive', onPress: () => setDrafts(prev => prev.filter(d => d.id !== item.id)) },
-                      { text: 'Cancel', style: 'cancel' },
-                    ])}
+                    onPress={() => setDraftMenuTarget(item)}
                   >
                     <Ionicons name="ellipsis-horizontal" size={20} color="#bbb" />
                   </TouchableOpacity>
@@ -26565,6 +27289,64 @@ setShowCamera(true);
             }}
           />
         </View>
+      </Modal>
+      <Modal visible={Boolean(draftMenuTarget)} animationType="slide" transparent onRequestClose={() => setDraftMenuTarget(null)}>
+        <TouchableOpacity style={flowStyles.ttModalOverlay} activeOpacity={1} onPress={() => setDraftMenuTarget(null)}>
+          <TouchableOpacity activeOpacity={1} style={flowStyles.ttMoreSheet}>
+            <View style={flowStyles.ttSheetHandle} />
+            <View style={flowStyles.ttSheetHeader}>
+              <TouchableOpacity onPress={() => setDraftMenuTarget(null)} hitSlop={{top:10,bottom:10,left:10,right:10}}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </TouchableOpacity>
+              <Text style={flowStyles.ttSheetTitle} numberOfLines={1}>{draftMenuTarget?.title || 'Draft'}</Text>
+              <View style={{ width: 22 }} />
+            </View>
+            <TouchableOpacity
+              style={flowStyles.ttSheetRow}
+              activeOpacity={0.75}
+              onPress={() => {
+                const target = draftMenuTarget;
+                setDraftMenuTarget(null);
+                if (!target) return;
+                setShowDrafts(false);
+                setRecordedVideoUri(target.uri);
+                setRecordingFlowStep('upload');
+                setShowCamera(true);
+                setUploadTitle(target.title || '');
+                setPrivacySetting(target.privacySetting || 'public');
+                setTaggedPeople(Array.isArray(target.taggedPeople) ? target.taggedPeople : []);
+                setSavedLinks(Array.isArray(target.savedLinks) ? target.savedLinks : []);
+                setCoverFramePosition(Number(target.coverFramePosition) || 0);
+                setAllowLikes(target.allowLikes !== false);
+                setAllowComments(target.allowComments !== false);
+                setAllowSaves(target.allowSaves !== false);
+                setAllowShares(target.allowShares !== false);
+                setBrandedContent(Boolean(target.brandedContent));
+                setAllowHighQuality(target.allowHighQuality !== false);
+                if (target.selectedSong) setSelectedSong(target.selectedSong);
+              }}
+            >
+              <Ionicons name="paper-plane-outline" size={20} color="#fff" style={{ marginRight: 14 }} />
+              <Text style={flowStyles.ttSheetRowLabel}>Open in Post screen</Text>
+            </TouchableOpacity>
+            <View style={{ height: 0.5, backgroundColor: '#2A2A2A', marginLeft: 20 }} />
+            <TouchableOpacity
+              style={flowStyles.ttSheetRow}
+              activeOpacity={0.75}
+              onPress={() => {
+                const targetId = draftMenuTarget?.id;
+                setDraftMenuTarget(null);
+                if (targetId) {
+                  setDrafts(prev => prev.filter(d => d.id !== targetId));
+                  showSuccessToast('Draft delete ho gaya.');
+                }
+              }}
+            >
+              <Ionicons name="trash-outline" size={20} color="#FE2C55" style={{ marginRight: 14 }} />
+              <Text style={[flowStyles.ttSheetRowLabel, { color: '#FE2C55' }]}>Delete Draft</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
       <View style={styles.container}>
         <StatusBar translucent={true} backgroundColor="transparent" barStyle="light-content" />
@@ -26669,11 +27451,35 @@ setShowCamera(true);
                   key={`feed-tab-${tabPage.key}`}
                   style={{ width, height, backgroundColor: '#000' }}
                   {...(isAdSkipScrollLocked ? {} : homePTR.pullHandlers)}
-                  // @ts-ignore block wheel scrolling during 5s skip ad lock
+                  // @ts-ignore block wheel scrolling during 5s skip ad lock or throttle to single video per tick
                   onWheel={Platform.OS === 'web' ? (e: any) => {
                     if (isAdSkipScrollLocked) {
                       e?.preventDefault?.();
                       e?.stopPropagation?.();
+                      return;
+                    }
+                    if (remoteFeedLayout === 'reels' && layoutPreviewIndex === null) {
+                      e?.preventDefault?.();
+                      e?.stopPropagation?.();
+                      const now = Date.now();
+                      if (now - lastWheelVideoSwitchRef.current < 450) {
+                        return;
+                      }
+                      const delta = e?.deltaY ?? 0;
+                      if (Math.abs(delta) < 18) return;
+                      lastWheelVideoSwitchRef.current = now;
+                      const activeIndex = tabPage.isFollowingTab
+                        ? tabVideoIndicesRef.current.following
+                        : tabVideoIndicesRef.current.forYou;
+                      const nextIndex = delta > 0
+                        ? Math.min(pageData.length - 1, activeIndex + 1)
+                        : Math.max(0, activeIndex - 1);
+                      if (nextIndex !== activeIndex) {
+                        pageListRef.current?.scrollToOffset({
+                          offset: nextIndex * height,
+                          animated: true,
+                        });
+                      }
                     }
                   } : undefined}
                 >
@@ -26685,7 +27491,9 @@ setShowCamera(true);
                       ? ({
                           flex: 1,
                           touchAction: isAdSkipScrollLocked ? 'none' : 'pan-y',
-                          overflowY: isAdSkipScrollLocked ? 'hidden' : undefined,
+                          overflowY: isAdSkipScrollLocked ? 'hidden' : 'scroll',
+                          scrollSnapType: remoteFeedLayout === 'reels' && layoutPreviewIndex === null ? 'y mandatory' : undefined,
+                          WebkitOverflowScrolling: 'touch',
                         } as any)
                       : { flex: 1 }}
                     data={pageData}
@@ -26741,7 +27549,7 @@ setShowCamera(true);
                       return renderRemoteLayoutItem({ item, index });
                     }}
                     keyExtractor={(item, index) => `${tabPage.key}_${String(item?.id ?? index)}`}
-                    pagingEnabled={remoteFeedLayout === 'reels' || layoutPreviewIndex !== null}
+                    pagingEnabled={Platform.OS === 'ios' && (remoteFeedLayout === 'reels' || layoutPreviewIndex !== null)}
                     snapToInterval={remoteFeedLayout === 'reels' || layoutPreviewIndex !== null
                       ? height
                       : undefined}
@@ -26767,6 +27575,64 @@ setShowCamera(true);
                         progressViewOffset={60}
                       />
                     }
+                    onScrollBeginDrag={(event) => {
+                      if (remoteFeedLayout === 'reels' && layoutPreviewIndex === null) {
+                        const startY = Number(event?.nativeEvent?.contentOffset?.y ?? 0);
+                        const startIndex = Math.max(0, Math.min(pageData.length - 1, Math.round(startY / height)));
+                        feedScrollDragStartRef.current[tabPage.key] = {
+                          y: startY,
+                          index: startIndex,
+                          time: Date.now(),
+                        };
+                      }
+                    }}
+                    onScrollEndDrag={(event) => {
+                      if (remoteFeedLayout === 'reels' && layoutPreviewIndex === null) {
+                        const dragInfo = feedScrollDragStartRef.current[tabPage.key];
+                        if (dragInfo) {
+                          const currentY = Number(event?.nativeEvent?.contentOffset?.y ?? 0);
+                          const diffY = currentY - dragInfo.y;
+                          const velocityY = Number(event?.nativeEvent?.velocity?.y ?? 0);
+                          const duration = Math.max(1, Date.now() - dragInfo.time);
+
+                          const isFastFlickDown = velocityY > 0.25 || (diffY > 30 && diffY / duration > 0.25);
+                          const isFastFlickUp = velocityY < -0.25 || (diffY < -30 && diffY / duration < -0.25);
+
+                          let targetIdx = dragInfo.index;
+                          if (diffY > height * 0.12 || isFastFlickDown) {
+                            targetIdx = dragInfo.index + 1;
+                          } else if (diffY < -height * 0.12 || isFastFlickUp) {
+                            targetIdx = dragInfo.index - 1;
+                          }
+
+                          // Strictly clamp: never advance or retreat by more than 1 item from drag start
+                          targetIdx = Math.max(0, Math.min(pageData.length - 1, targetIdx));
+                          targetIdx = Math.max(dragInfo.index - 1, Math.min(dragInfo.index + 1, targetIdx));
+
+                          pageListRef.current?.scrollToOffset({
+                            offset: targetIdx * height,
+                            animated: true,
+                          });
+                        }
+                      }
+                    }}
+                    onMomentumScrollEnd={(event) => {
+                      if (remoteFeedLayout === 'reels' && layoutPreviewIndex === null) {
+                        const endY = Number(event?.nativeEvent?.contentOffset?.y ?? 0);
+                        const settledIdx = Math.round(endY / height);
+                        const dragInfo = feedScrollDragStartRef.current[tabPage.key];
+                        if (dragInfo) {
+                          // Double guard: if momentum overshot beyond ±1, snap back to strictly 1 item jump
+                          const clampedIdx = Math.max(0, Math.min(pageData.length - 1, Math.max(dragInfo.index - 1, Math.min(dragInfo.index + 1, settledIdx))));
+                          if (clampedIdx !== settledIdx) {
+                            pageListRef.current?.scrollToOffset({
+                              offset: clampedIdx * height,
+                              animated: true,
+                            });
+                          }
+                        }
+                      }
+                    }}
                     onScroll={(event) => {
                       homePTR.onScroll(event);
                       setExpandedVideoDetailsId(null);
@@ -26934,7 +27800,18 @@ setShowCamera(true);
 const styles = StyleSheet.create({
          
     container: { flex: 1, backgroundColor: '#000' },
-  videoFullScreen: { height: height, width: width, backgroundColor: '#000' },
+  videoFullScreen: {
+    height: height,
+    width: width,
+    backgroundColor: '#000',
+    ...(Platform.OS === 'web'
+      ? ({
+          scrollSnapAlign: 'start',
+          scrollSnapStop: 'always',
+          WebkitScrollSnapStop: 'always',
+        } as any)
+      : {}),
+  },
   topGradient: {
     position: 'absolute',
     top: 0,
